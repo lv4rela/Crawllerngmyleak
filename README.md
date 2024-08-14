@@ -28,7 +28,7 @@ Make sure you have the following dependencies installed:
 
     ```bash
      git clone https://github.com/lv4rela/Crawllerngmyleak.git
-     cd cogninja
+     cd Crawllerngmyleak
     ```
 
 2. Install the required Python packages:
