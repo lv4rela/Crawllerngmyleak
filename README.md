@@ -35,7 +35,7 @@ Make sure you have the following dependencies installed:
 
     ```bash
     pip install -r requirements.txt
-    ``
+    ```
 
 ## Configuration
 
