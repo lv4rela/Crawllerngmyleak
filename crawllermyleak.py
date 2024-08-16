@@ -43,7 +43,7 @@ def extract_sensitive_info(content, source):
         'Github-1': r'\b((?:ghp|gho|ghu|ghs|ghr)_[a-zA-Z0-9]{36,255}\b)',
         'Github App Token': r'(ghu|ghs)_[0-9a-zA-Z]{36}',
         'Github OAuth Access Token': r'gho_[0-9a-zA-Z]{36}',
-        'Bearer token': r'(B|b)(E|e)(A|a)(R|r)(E|e)(R|r) [a-zA-Z0-9]+(\'|\"|}|\n|;)',
+        'Token':r'\"token\"\s*:\s*\"([A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.[A-Za-z0-9-_.+/=]*)\"',
         'Token': r'\"token\"\s*:\s*\"([a-zA-Z0-9/_-]{20,})\"',
         'Generic API_1': r'\"x-api-key\"\s*:\s*\"([a-zA-Z0-9]{20,})\"',
         'Generic API_2': r'\"api-key\"\s*:\s*\"([a-zA-Z0-9]{20,})\"',
