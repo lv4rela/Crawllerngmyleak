@@ -63,7 +63,7 @@ def extract_sensitive_info(content, source):
     sensitive_info = {key: set(re.findall(pattern, content)) for key, pattern in patterns.items()}
 
     if any(sensitive_info.values()):
-        print(f"{Fore.GREEN}\nFound Cognito info in: {Fore.WHITE}{source}")
+        print(f"{Fore.GREEN}\n[FOUND]: {Fore.WHITE}{source}")
         for key, values in sensitive_info.items():
             if values:
                 for value in values:
