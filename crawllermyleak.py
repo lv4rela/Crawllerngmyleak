@@ -102,7 +102,7 @@ def main_menu():
                                        |___/      |__/                
         '''
     print(f"{Fore.CYAN}{ninja_ascii}")
-    print(f"{Fore.YELLOW}[INFO] - Welcome to Cogcrowling - Search for cognito data in JS files")
+    print(f"{Fore.YELLOW}[INFO] - Welcome to Crawllermyleak - Search for secrets in JS files")
     print(f"{Fore.YELLOW}[INFO] - Author: {Fore.WHITE}@lv4rela\n")
 
     parser = argparse.ArgumentParser(description='Cogcrowling- HELP')
