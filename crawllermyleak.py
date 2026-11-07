@@ -154,10 +154,9 @@ def main_menu():
                                        |___/      |__/                
         '''
     print(f"{Fore.CYAN}{ninja_ascii}")
-    print(f"{Fore.YELLOW}[INFO] - Welcome to Cogcrowling - Search for cognito data in JS files")
+    print(f"{Fore.YELLOW}[INFO] - Welcome to Crawllermyleak - Search for secrets in JS files")
     print(f"{Fore.YELLOW}[INFO] - Author: {Fore.WHITE}@lv4rela")
     print(f"{Fore.YELLOW}[INFO] - Date: {Fore.WHITE}{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n")
-    
 
     parser = argparse.ArgumentParser(description='Cogcrowling- HELP')
     parser.add_argument("-u", "--url", help="The URL of the web page to crawl")
