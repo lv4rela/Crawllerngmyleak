@@ -7,12 +7,17 @@ import csv
 import json
 import time
 import argparse
+import requests
 from urllib.parse import urljoin
+from functools import partial
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from colorama import Fore, init
-from multiprocessing import Pool
+from multiprocessing import Pool, cpu_count
 from datetime import datetime
 
 init(autoreset=True)
+# recursos sao baixados via requests (sem verificar TLS de host mal configurado)
+requests.packages.urllib3.disable_warnings()
 
 def initialize_driver():
     options = Options()
@@ -105,7 +110,33 @@ def extract_sensitive_info(content, source):
                     findings.append({'timestamp': ts, 'type': key, 'value': value, 'url': source})
     return findings
 
-PAGE_WAIT = 4  # segundos de espera pra pagina disparar XHR/fetch dinamicos
+PAGE_WAIT = 4        # segundos de espera pra pagina disparar XHR/fetch dinamicos
+FETCH_THREADS = 16   # downloads de recursos em paralelo por pagina
+FETCH_TIMEOUT = 15   # timeout (s) por recurso
+
+def build_session(driver):
+    """Sessao requests herdando cookies e User-Agent do browser (mantem auth)."""
+    session = requests.Session()
+    try:
+        for c in driver.get_cookies():
+            session.cookies.set(c.get('name'), c.get('value'), domain=c.get('domain'))
+    except Exception:
+        pass
+    try:
+        ua = driver.execute_script("return navigator.userAgent")
+        if ua:
+            session.headers.update({'User-Agent': ua})
+    except Exception:
+        pass
+    return session
+
+def fetch_resource(session, target):
+    """Baixa um recurso via HTTP (muito mais rapido que dirigir o browser)."""
+    try:
+        resp = session.get(target, timeout=FETCH_TIMEOUT, verify=False)
+        return target, resp.text, None
+    except Exception as e:
+        return target, None, short_err(e)
 
 # extensoes binarias/visuais que nao vale a pena escanear
 SKIP_EXT = ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ico',
@@ -141,13 +172,13 @@ def collect_requested_urls(driver):
             urls.add(u)
     return urls
 
-def process_page(url):
+def process_page(url, wait=PAGE_WAIT, threads=FETCH_THREADS):
     driver = initialize_driver()
     url = ensure_http_prefix(url)
     findings = []
     try:
         driver.get(url)
-        time.sleep(PAGE_WAIT)  # deixa os requests dinamicos dispararem
+        time.sleep(wait)  # deixa os requests dinamicos dispararem
         main_content = driver.page_source
         findings += extract_sensitive_info(main_content, url)
 
@@ -156,12 +187,18 @@ def process_page(url):
         js_files = set(fetch_js_files(driver, url))
         targets = js_files | {u for u in requested if is_scannable(u)}
 
-        for target in sorted(targets):
-            try:
-                driver.get(target)
-                findings += extract_sensitive_info(driver.page_source, target)
-            except Exception as e:
-                print(f"{Fore.RED}Error fetching resource: {Fore.WHITE}{target} - {short_err(e)}")
+        # baixa os recursos em paralelo via HTTP (herdando cookies/UA do browser).
+        # o regex roda na thread principal pra nao embaralhar a saida do console.
+        session = build_session(driver)
+        if targets:
+            with ThreadPoolExecutor(max_workers=min(threads, len(targets))) as ex:
+                futures = {ex.submit(fetch_resource, session, t): t for t in targets}
+                for fut in as_completed(futures):
+                    target, text, err = fut.result()
+                    if err:
+                        print(f"{Fore.RED}Error fetching resource: {Fore.WHITE}{target} - {err}")
+                    elif text:
+                        findings += extract_sensitive_info(text, target)
     except Exception as e:
         print(f"{Fore.RED}Error fetching main page: {Fore.WHITE}{url} - {short_err(e)}")
     finally:
@@ -188,6 +225,12 @@ def main_menu():
     parser.add_argument("-u", "--url", help="The URL of the web page to crawl")
     parser.add_argument("-f", "--file", help="A file containing a list of URLs to crawl")
     parser.add_argument("-o", "--output", default="results.csv", help="CSV file to save results (default: results.csv)")
+    parser.add_argument("-p", "--processes", type=int, default=None,
+                        help="Paginas processadas em paralelo (default: nº de CPUs)")
+    parser.add_argument("-t", "--threads", type=int, default=FETCH_THREADS,
+                        help=f"Downloads de recursos em paralelo por pagina (default: {FETCH_THREADS})")
+    parser.add_argument("-w", "--wait", type=float, default=PAGE_WAIT,
+                        help=f"Espera (s) pra pagina disparar XHR dinamicos (default: {PAGE_WAIT})")
     args = parser.parse_args()
 
     if args.url:
@@ -203,9 +246,14 @@ def main_menu():
         print(f"{Fore.YELLOW}INFO: Please provide either a URL with -u or a file with -f.")
         return
 
-    max_processes = 10  #maximos simultaneous process
+    # escala com a maquina: 1 processo por CPU, mas nunca mais que o nº de URLs
+    max_processes = args.processes or cpu_count()
+    max_processes = max(1, min(max_processes, len(urls)))
+    worker = partial(process_page, wait=args.wait, threads=args.threads)
+    print(f"{Fore.YELLOW}[INFO] {len(urls)} URL(s) | {max_processes} processo(s) | "
+          f"{args.threads} thread(s)/pagina | wait {args.wait}s\n")
     with Pool(processes=max_processes) as pool:
-        results = pool.map(process_page, urls)
+        results = pool.map(worker, urls)
 
     # achata os resultados de todos os processos e remove duplicatas
     all_findings = []
