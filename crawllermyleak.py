@@ -29,6 +29,16 @@ def initialize_driver():
     options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
     return webdriver.Chrome(options=options)
 
+def warmup_driver():
+    """Abre/fecha um driver antes do pool p/ popular o cache do Selenium Manager
+    com UM escritor so. Evita a corrida que corrompe o se-metadata.json quando
+    dezenas de processos sobem o Chrome ao mesmo tempo."""
+    try:
+        d = initialize_driver()
+        d.quit()
+    except Exception as e:
+        print(f"{Fore.YELLOW}[WARN] warm-up do driver falhou (segue mesmo assim): {short_err(e)}")
+
 def _safe_attr(el, attr):
     try:
         return el.get_attribute(attr)
@@ -252,42 +262,64 @@ def main_menu():
     worker = partial(process_page, wait=args.wait, threads=args.threads)
     print(f"{Fore.YELLOW}[INFO] {len(urls)} URL(s) | {max_processes} processo(s) | "
           f"{args.threads} thread(s)/pagina | wait {args.wait}s\n")
-    with Pool(processes=max_processes) as pool:
-        results = pool.map(worker, urls)
-
-    # achata os resultados de todos os processos e remove duplicatas
-    all_findings = []
-    seen = set()
-    for sub in results:
-        for f in sub:
-            dedup_key = (f['type'], f['value'], f['url'])
-            if dedup_key not in seen:
-                seen.add(dedup_key)
-                all_findings.append(f)
-
-    if all_findings:
-        output = args.output
-        # se apontou pra uma pasta, grava um results.csv dentro dela
-        if os.path.isdir(output):
-            output = os.path.join(output, 'results.csv')
+    # resolve o caminho do CSV (se apontou pra uma pasta, grava results.csv dentro dela)
+    output = args.output
+    if os.path.isdir(output):
+        output = os.path.join(output, 'results.csv')
+    parent = os.path.dirname(output)
+    if parent:
         try:
-            parent = os.path.dirname(output)
-            if parent:
-                os.makedirs(parent, exist_ok=True)
-            with open(output, 'w', newline='', encoding='utf-8') as fp:
-                writer = csv.DictWriter(fp, fieldnames=['timestamp', 'type', 'value', 'url'])
-                writer.writeheader()
-                writer.writerows(all_findings)
-            print(f"{Fore.GREEN}\n[INFO] {len(all_findings)} resultado(s) salvo(s) em {Fore.WHITE}{output}")
-        except OSError as e:
-            # nao perde os achados: imprime na tela como fallback
-            print(f"{Fore.RED}\n[ERRO] Nao consegui gravar em '{output}': {e}")
-            print(f"{Fore.YELLOW}[INFO] Resultados (fallback):")
-            print("timestamp,type,value,url")
-            for f in all_findings:
-                print(f"{f['timestamp']},{f['type']},{f['value']},{f['url']}")
+            os.makedirs(parent, exist_ok=True)
+        except OSError:
+            pass
+
+    # abre o CSV ANTES de comecar: cada pagina que termina ja grava + flush,
+    # entao se a execucao for interrompida (Ctrl+C, kill, crash) o arquivo
+    # continua com tudo que foi encontrado ate aquele ponto.
+    fieldnames = ['timestamp', 'type', 'value', 'url']
+    try:
+        fp = open(output, 'w', newline='', encoding='utf-8')
+    except OSError as e:
+        print(f"{Fore.RED}[ERRO] Nao consegui abrir '{output}' p/ escrita: {e}")
+        return
+    writer = csv.DictWriter(fp, fieldnames=fieldnames)
+    writer.writeheader()
+    fp.flush()
+
+    warmup_driver()  # popula o cache do Selenium Manager antes de forkar o pool
+
+    seen = set()
+    total = 0        # achados unicos gravados
+    done = 0         # URLs processadas
+    interrupted = False
+
+    pool = Pool(processes=max_processes)
+    try:
+        # imap_unordered entrega o resultado conforme CADA pagina termina
+        for sub in pool.imap_unordered(worker, urls):
+            done += 1
+            for f in sub:
+                dedup_key = (f['type'], f['value'], f['url'])
+                if dedup_key not in seen:
+                    seen.add(dedup_key)
+                    writer.writerow(f)
+                    total += 1
+            fp.flush()  # garante que o disco reflete o estado atual
+    except KeyboardInterrupt:
+        interrupted = True
+        print(f"{Fore.YELLOW}\n[INFO] Interrompido! Salvando o que ja foi encontrado...")
+        pool.terminate()
     else:
-        print(f"{Fore.YELLOW}\n[INFO] Nenhum resultado encontrado.")
+        pool.close()
+    finally:
+        pool.join()
+        fp.flush()
+        fp.close()
+
+    status = "parcial (interrompido)" if interrupted else "completo"
+    cor = Fore.YELLOW if interrupted else Fore.GREEN
+    print(f"{cor}\n[INFO] {total} resultado(s) salvo(s) em {Fore.WHITE}{output} "
+          f"{cor}| {done}/{len(urls)} URL(s) | {status}")
 
 if __name__ == "__main__":
     main_menu()
