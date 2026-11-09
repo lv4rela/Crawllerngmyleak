@@ -19,15 +19,25 @@ init(autoreset=True)
 # recursos sao baixados via requests (sem verificar TLS de host mal configurado)
 requests.packages.urllib3.disable_warnings()
 
+PAGE_LOAD_TIMEOUT = 30  # segundos max p/ carregar a pagina principal (site lento falha rapido)
+
 def initialize_driver():
     options = Options()
     options.add_argument("--headless=new")
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
+    # reduz consumo de RAM/CPU por instancia (importante com muitos processos)
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-background-networking")
+    options.add_argument("--disable-software-rasterizer")
+    options.add_argument("--blink-settings=imagesEnabled=false")
+    options.page_load_strategy = "eager"  # nao espera recursos secundarios (DOMContentLoaded)
     # liga o log de rede (CDP) pra capturar TODOS os recursos que a pagina chamar
     options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
-    return webdriver.Chrome(options=options)
+    driver = webdriver.Chrome(options=options)
+    driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
+    return driver
 
 def warmup_driver():
     """Abre/fecha um driver antes do pool p/ popular o cache do Selenium Manager
@@ -183,11 +193,20 @@ def collect_requested_urls(driver):
     return urls
 
 def process_page(url, wait=PAGE_WAIT, threads=FETCH_THREADS):
-    driver = initialize_driver()
     url = ensure_http_prefix(url)
     findings = []
+    # subir o Chrome pode falhar sob pressao de memoria: isola p/ nao derrubar a run
     try:
-        driver.get(url)
+        driver = initialize_driver()
+    except Exception as e:
+        print(f"{Fore.RED}Error starting browser: {Fore.WHITE}{url} - {short_err(e)}")
+        return findings
+    try:
+        try:
+            driver.get(url)
+        except Exception as e:
+            # timeout/carregamento parcial: ainda tenta extrair o que ja carregou
+            print(f"{Fore.YELLOW}[WARN] load parcial: {Fore.WHITE}{url} - {short_err(e)}")
         time.sleep(wait)  # deixa os requests dinamicos dispararem
         main_content = driver.page_source
         findings += extract_sensitive_info(main_content, url)
@@ -212,7 +231,10 @@ def process_page(url, wait=PAGE_WAIT, threads=FETCH_THREADS):
     except Exception as e:
         print(f"{Fore.RED}Error fetching main page: {Fore.WHITE}{url} - {short_err(e)}")
     finally:
-        driver.quit()
+        try:
+            driver.quit()
+        except Exception:
+            pass
     return findings
 
 def ensure_http_prefix(url):
@@ -308,10 +330,14 @@ def main_menu():
     except KeyboardInterrupt:
         interrupted = True
         print(f"{Fore.YELLOW}\n[INFO] Interrompido! Salvando o que ja foi encontrado...")
-        pool.terminate()
-    else:
-        pool.close()
+    except Exception as e:
+        interrupted = True
+        print(f"{Fore.RED}\n[ERRO] Falha inesperada no pool: {short_err(e)}")
+        print(f"{Fore.YELLOW}[INFO] O que ja foi encontrado continua salvo no CSV.")
     finally:
+        # terminate sempre (mesmo no caminho feliz, o loop ja drenou tudo):
+        # evita o 'Pool is still running' se uma excecao subir do worker
+        pool.terminate()
         pool.join()
         fp.flush()
         fp.close()
